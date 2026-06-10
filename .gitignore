@@ -175,3 +175,7 @@ cython_debug/
 
 # Vscode
 .vscode
+
+# Robin: persisted scraped dark-web content (do not commit)
+investigations/
+summary_*.md

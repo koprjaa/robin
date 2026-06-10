@@ -1,6 +1,9 @@
 import config
+import ipaddress
+import logging
+import socket
 import requests
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit
 from langchain_openai import ChatOpenAI
 from langchain_ollama import ChatOllama
 from typing import Callable, Optional, List
@@ -17,6 +20,63 @@ from config import (
     ANTHROPIC_API_KEY,
     LLAMA_CPP_BASE_URL,
 )
+
+
+def _is_safe_base_url(base_url: str, allow_loopback: bool = False) -> bool:
+    """
+    SSRF guard for user-supplied LLM endpoint URLs.
+
+    Requires an http/https scheme. Resolves the host and rejects any address
+    that maps to a private, loopback, link-local, reserved or otherwise
+    non-global range (blocks cloud metadata IPs such as 169.254.169.254).
+
+    Remote (non-loopback) hosts must use https.
+
+    `allow_loopback=True` permits loopback / localhost targets only — used for
+    Ollama, which legitimately runs on the local machine. Other private ranges
+    (RFC1918, link-local, metadata) stay blocked even when loopback is allowed.
+    """
+    if not base_url or not isinstance(base_url, str):
+        return False
+
+    parts = urlsplit(base_url.strip())
+    if parts.scheme not in ("http", "https"):
+        return False
+
+    host = parts.hostname
+    if not host:
+        return False
+
+    # Resolve all addresses the host maps to; reject if any is non-global.
+    try:
+        infos = socket.getaddrinfo(host, parts.port, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError):
+        return False
+
+    addrs = []
+    for info in infos:
+        try:
+            addrs.append(ipaddress.ip_address(info[4][0]))
+        except ValueError:
+            return False
+    if not addrs:
+        return False
+
+    for ip in addrs:
+        if ip.is_loopback:
+            if not allow_loopback:
+                return False
+            continue
+        # Any non-global address (private, link-local, reserved, metadata,
+        # multicast, unspecified) is rejected for both modes.
+        if not ip.is_global:
+            return False
+
+    # Remote (non-loopback) endpoints must use TLS.
+    if not all(ip.is_loopback for ip in addrs) and parts.scheme != "https":
+        return False
+
+    return True
 
 
 class BufferedStreamingHandler(BaseCallbackHandler):
@@ -199,6 +259,12 @@ def fetch_ollama_models() -> List[str]:
     if not base_url:
         return []
 
+    # Ollama runs locally by default, so loopback is allowed here; other
+    # private/metadata ranges remain blocked to prevent SSRF.
+    if not _is_safe_base_url(base_url, allow_loopback=True):
+        logging.warning("Ollama base URL rejected by SSRF guard: %s", base_url)
+        return []
+
     try:
         resp = requests.get(urljoin(base_url, "api/tags"), timeout=3)
         resp.raise_for_status()
@@ -210,7 +276,6 @@ def fetch_ollama_models() -> List[str]:
                 available.append(name)
         return available
     except (requests.RequestException, ValueError):
-        import logging
         if OLLAMA_BASE_URL and ("localhost" in OLLAMA_BASE_URL.lower() or "127.0.0.1" in OLLAMA_BASE_URL.lower()):
             logging.warning(
                 "Ollama unreachable at %s. If running Robin in Docker, use "
@@ -241,6 +306,14 @@ def fetch_llama_cpp_models() -> List[str]:
 def fetch_custom_api_models() -> List[str]:
     """Retrieve models from any OpenAI-compatible API endpoint."""
     if not config.CUSTOM_API_BASE_URL:
+        return []
+    # User-supplied URL: enforce SSRF guard before fetching. Remote provider,
+    # so loopback and private/metadata ranges are all blocked; https required.
+    if not _is_safe_base_url(config.CUSTOM_API_BASE_URL):
+        logging.warning(
+            "Custom API base URL rejected by SSRF guard: %s",
+            config.CUSTOM_API_BASE_URL,
+        )
         return []
     base = config.CUSTOM_API_BASE_URL.rstrip("/")
     if not base.endswith("/v1"):
@@ -367,6 +440,14 @@ def resolve_model_config(model_choice: str):
             custom_candidates.append(manual)
     for custom_model in custom_candidates:
         if _normalize_model_name(custom_model) == model_choice_lower:
+            # Re-validate: a manual model name can reach here without having
+            # gone through fetch_custom_api_models()'s SSRF guard.
+            if not _is_safe_base_url(config.CUSTOM_API_BASE_URL or ""):
+                logging.warning(
+                    "Custom API base URL rejected by SSRF guard: %s",
+                    config.CUSTOM_API_BASE_URL,
+                )
+                break
             base = (config.CUSTOM_API_BASE_URL or "").rstrip("/")
             if not base.endswith("/v1"):
                 base += "/v1"

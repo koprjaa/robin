@@ -1,5 +1,6 @@
 
 import base64
+import html
 import json
 import streamlit as st
 from datetime import datetime
@@ -523,7 +524,8 @@ if _do_run:
             except Exception as e:
                 _render_pipeline_error("refine the query", e)
     p1.container(border=True).markdown(
-        f"<div class='colHeight'><p class='pTitle'>Refined Query</p><p>{st.session_state.refined}</p></div>",
+        "<div class='colHeight'><p class='pTitle'>Refined Query</p><p>"
+        f"{html.escape(str(st.session_state.refined))}</p></div>",
         unsafe_allow_html=True,
     )
 
@@ -625,7 +627,11 @@ if _do_run:
         now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         fname = f"summary_{now}.md"
         b64 = base64.b64encode(st.session_state.streamed_summary.encode()).decode()
-        href = f'<div class="aStyle">📥 <a href="data:file/markdown;base64,{b64}" download="{fname}">Download</a></div>'
+        safe_fname = html.escape(fname, quote=True)
+        href = (
+            f'<div class="aStyle">📥 <a href="data:file/markdown;base64,{b64}" '
+            f'download="{safe_fname}">Download</a></div>'
+        )
         st.markdown(href, unsafe_allow_html=True)
 
     status_slot.success(f"✔️ Pipeline completed successfully! Investigation saved as `{_fname}`")
