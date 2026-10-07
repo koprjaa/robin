@@ -1,0 +1,13 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - name: Test (pytest)
+        run: uv run --python 3.12 --with pytest --with requests --with beautifulsoup4 --with python-dotenv python -m pytest -q tests/
