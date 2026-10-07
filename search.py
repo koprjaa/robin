@@ -5,6 +5,7 @@ import os
 from bs4 import BeautifulSoup
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from requests.adapters import HTTPAdapter
+from urllib.parse import urlparse
 from urllib3.util.retry import Retry
 
 import warnings
@@ -44,6 +45,10 @@ SEARCH_ENGINES = [
 # Backward-compatible flat list used by existing search logic
 DEFAULT_SEARCH_ENGINES = [e["url"] for e in SEARCH_ENGINES]
 
+# The host a link actually reaches must be a v3 onion address (optionally with a
+# subdomain): "x.onion.evil.example" or "x.onion@127.0.0.1" are clearweb.
+ONION_HOST_RE = re.compile(r"(?:[a-z0-9-]+\.)*[a-z2-7]{56}\.onion")
+
 def get_tor_session():
     session = requests.Session()
     retry = Retry(
@@ -79,7 +84,7 @@ def fetch_search_results(endpoint, query):
                     title = a.get_text(strip=True)
                     # Extract onion links
                     link = re.findall(r'https?:\/\/[a-z0-9\.]+\.onion.*', href)
-                    if len(link) != 0:
+                    if len(link) != 0 and ONION_HOST_RE.fullmatch(urlparse(link[0]).hostname or ""):
                         # Basic filtering to avoid self-referential links
                         if "search" not in link[0] and len(title) > 3:
                             links.append({"title": title, "link": link[0]})

@@ -90,7 +90,9 @@ def scrape_single(url_data, rotate=False, rotate_interval=5, control_port=9051, 
     if parsed_url.scheme not in ("http", "https"):
         return url, title
 
-    use_tor = (urlparse(url).hostname or "").lower().endswith(".onion")
+    if not (parsed_url.hostname or "").lower().endswith(".onion"):
+        # Never fetch clearweb: it would bypass Tor, leak the real IP and reach localhost/LAN.
+        return url, title
 
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
@@ -99,13 +101,9 @@ def scrape_single(url_data, rotate=False, rotate_interval=5, control_port=9051, 
 
     response = None
     try:
-        session = _get_session(use_tor=use_tor)
-        if use_tor:
-            # Increased timeout for Tor latency
-            response = session.get(url, headers=headers, timeout=(10, 45), stream=True)
-        else:
-            # Fallback for clearweb if needed, though tool focuses on dark web
-            response = session.get(url, headers=headers, timeout=(5, 25), stream=True)
+        session = _get_session(use_tor=True)
+        # Increased timeout for Tor latency
+        response = session.get(url, headers=headers, timeout=(10, 45), stream=True)
 
         if response.status_code == 200:
             content_type = (response.headers.get("Content-Type") or "").lower()

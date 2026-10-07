@@ -1,5 +1,7 @@
 import scrape
 
+ONION = "http://exampleoniontargetabcdefghijklmnopqrstuvwxyz234567abcdef.onion"
+
 
 def test_normalize_url_data():
     assert scrape._normalize_url_data(None) == ("", "Untitled")
@@ -41,24 +43,46 @@ class _FakeSessionScrape:
 def test_scrape_single_extracts_and_cleans_text(monkeypatch):
     body = b"<html><script>evil()</script><body>Hello   World</body></html>"
     fake_response = _FakeHTTPResponse(status_code=200, headers={"Content-Type": "text/html"}, body=body)
-    monkeypatch.setattr(scrape, "_get_session", lambda use_tor=False: _FakeSessionScrape(fake_response))
+    used_tor = []
 
-    url, text = scrape.scrape_single({"link": "http://example.test/page", "title": "My Title"})
+    def fake_get_session(use_tor=False):
+        used_tor.append(use_tor)
+        return _FakeSessionScrape(fake_response)
 
-    assert url == "http://example.test/page"
+    monkeypatch.setattr(scrape, "_get_session", fake_get_session)
+
+    url, text = scrape.scrape_single({"link": ONION + "/page", "title": "My Title"})
+
+    assert url == ONION + "/page"
     assert text == "My Title - Hello World"
     assert "evil" not in text
     assert fake_response.closed is True
+    assert used_tor == [True]
 
 
 def test_scrape_single_rejects_disallowed_content_type(monkeypatch):
     fake_response = _FakeHTTPResponse(status_code=200, headers={"Content-Type": "application/pdf"}, body=b"%PDF-1.4 ignored")
     monkeypatch.setattr(scrape, "_get_session", lambda use_tor=False: _FakeSessionScrape(fake_response))
 
-    assert scrape.scrape_single({"link": "http://example.test/doc.pdf", "title": "A PDF"}) == (
-        "http://example.test/doc.pdf",
+    assert scrape.scrape_single({"link": ONION + "/doc.pdf", "title": "A PDF"}) == (
+        ONION + "/doc.pdf",
         "A PDF",
     )
+
+
+def test_scrape_single_never_fetches_clearweb(monkeypatch):
+    # A direct request would leak the real IP and could reach localhost/LAN.
+    sessions = []
+    monkeypatch.setattr(scrape, "_get_session", lambda use_tor=False: sessions.append(use_tor))
+
+    for link in (
+        "https://example.com/",
+        "http://abc.onion.attacker.example/x",
+        "http://abc.onion@127.0.0.1:8501/",
+    ):
+        assert scrape.scrape_single({"link": link, "title": "T"}) == (link, "T")
+
+    assert sessions == []
 
 
 def test_scrape_multiple_rejects_non_list_input():

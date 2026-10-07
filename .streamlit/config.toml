@@ -1,5 +1,7 @@
 [server]
 runOnSave = true
+# Loopback only: the UI has no login. Docker's entrypoint.sh overrides this with 0.0.0.0.
+address = "127.0.0.1"
 
 [theme]
 base="dark"

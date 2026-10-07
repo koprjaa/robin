@@ -33,8 +33,8 @@ def test_fetch_search_results_parses_and_filters_onion_links(monkeypatch):
     results = search.fetch_search_results("http://example.onion/search?q={query}", "my query")
 
     assert results == [
-        {"title": "A Real Result Page", "link": "http://exampleoniontarget1234567890abcdefghijklmno.onion/page1"},
-        {"title": "Second Valid Onion Result", "link": "http://anotheronion0987654321zyxwvutsrqponmlkjih.onion/thread/42"},
+        {"title": "A Real Result Page", "link": "http://exampleoniontargetabcdefghijklmnopqrstuvwxyz234567abcdef.onion/page1"},
+        {"title": "Second Valid Onion Result", "link": "http://anotheroniontargetzyxwvutsrqponmlkjihgfedcba765432zyxwvu.onion/thread/42"},
     ]
     # endpoint.format(query=...) must have actually substituted the query
     assert fake_session.requested_urls == ["http://example.onion/search?q=my query"]
@@ -75,3 +75,20 @@ def test_get_search_results_deduplicates_by_trailing_slash(monkeypatch):
 
     links = sorted(r["link"] for r in results)
     assert links == ["http://dup.onion/page/", "http://unique.onion/x"]
+
+
+def test_fetch_search_results_drops_links_whose_host_is_not_an_onion(monkeypatch):
+    v3 = "exampleoniontargetabcdefghijklmnopqrstuvwxyz234567abcdef"
+    html = (
+        f'<a href="http://{v3}.onion.attacker.example/x">Lookalike host</a>'
+        f'<a href="http://{v3}.onion@127.0.0.1:8501/">Userinfo trick</a>'
+        '<a href="http://tooshort.onion/x">Not a v3 address</a>'
+        f'<a href="/redirect?url=http://{v3}.onion/wrapped">Wrapped result</a>'
+    )
+    fake_session = _FakeSession(response=_FakeResponse(200, html))
+    monkeypatch.setattr(search, "get_tor_session", lambda: fake_session)
+
+    results = search.fetch_search_results("http://example.onion/search?q={query}", "q")
+
+    # Only the engine's redirect wrapper around a real onion survives.
+    assert results == [{"title": "Wrapped result", "link": f"http://{v3}.onion/wrapped"}]
